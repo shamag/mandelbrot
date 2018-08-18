@@ -86,11 +86,6 @@ fn escapes(c: Complex<f64>, limit: u32) -> Option<u32> {
     }
     return None;
 }
-enum Colors{
-    Red,
-    Green,
-    Blue
-}
 
 fn get_color(count: usize, chan: usize, palette: u8) -> u8 {
     let palette1 = [
@@ -101,8 +96,27 @@ fn get_color(count: usize, chan: usize, palette: u8) -> u8 {
         [0xcf, 0xe9, 0x90],
         [0xea, 0xfb, 0xc5]
     ];
+    let palette2 = [
+	[0x00, 0x00, 0x00],
+	[0x03, 0x26, 0x28],
+	[0x07, 0x3e, 0x1e],
+	[0x18, 0x55, 0x08],
+	[0x5f, 0x6e, 0x0f],
+	[0x84, 0x50, 0x19],
+	[0x9b, 0x30, 0x22],
+	[0xb4, 0x92, 0x2f],
+	[0x94, 0xca, 0x3d],
+	[0x4f, 0xd5, 0x51],
+	[0x66, 0xff, 0xb3],
+	[0x82, 0xc9, 0xe5],
+	[0x9d, 0xa3, 0xeb],
+	[0xd7, 0xb5, 0xf3],
+	[0xfd, 0xd6, 0xf6],
+	[0xff, 0xf0, 0xf2],
+    ];
     match palette {
         1 => palette1[(255 - count) % 6][chan],
+        2 => palette2[(255 - count) % 16][chan],
         0 ... 255 => (255 - count) as u8,
         _ => palette1[count % 6][chan]
     }
@@ -126,7 +140,7 @@ fn render(pixels: &mut [u8], bounds: (usize, usize),
             let point = pixel_to_point(bounds, (c, 0),
                                        upper_left, lower_right);
             let cou: usize =
-                match escapes(Complex { re: point.0, im: point.1 }, 255) {
+                match escapes(Complex { re: point.0, im: point.1 }, 256) {
                     None => 255 as usize,
                     Some(count) => {
                         count as usize
@@ -194,7 +208,7 @@ fn main() {
     let center = parse_pair::<f64>(&args[3], ',')
         .expect("error parsing center point");
     let width = parse_pair::<f64>(&args[4], ',')
-        .expect("error parsing width anf height");
+        .expect("error parsing width and height");
     let mut palette: u8 = 0;
     if args.len() >= 6 {
         palette = <u8>::from_str(&args[5])
