@@ -84,8 +84,43 @@ fn escapes(c: Complex<f64>, limit: u32) -> Option<u32> {
             return Some(i);
         }
     }
-
     return None;
+}
+
+fn get_color(count: usize, chan: usize, palette: u8) -> u8 {
+    let palette1 = [
+        [0x18, 0x4d, 0x68],
+        [0x31, 0x80, 0x9f],
+        [0xfb, 0x9c, 0x6c],
+        [0xd5, 0x51, 0x21],
+        [0xcf, 0xe9, 0x90],
+        [0xea, 0xfb, 0xc5]
+    ];
+    let palette2 = [
+	[0x00, 0x00, 0x00],
+	[0x03, 0x26, 0x28],
+	[0x07, 0x3e, 0x1e],
+	[0x18, 0x55, 0x08],
+	[0x5f, 0x6e, 0x0f],
+	[0x84, 0x50, 0x19],
+	[0x9b, 0x30, 0x22],
+	[0xb4, 0x92, 0x2f],
+	[0x94, 0xca, 0x3d],
+	[0x4f, 0xd5, 0x51],
+	[0x66, 0xff, 0xb3],
+	[0x82, 0xc9, 0xe5],
+	[0x9d, 0xa3, 0xeb],
+	[0xd7, 0xb5, 0xf3],
+	[0xfd, 0xd6, 0xf6],
+	[0xff, 0xf0, 0xf2],
+    ];
+    match palette {
+        1 => palette1[(255 - count) % 6][chan],
+        2 => palette2[(255 - count) % 16][chan],
+        0 ... 255 => (255 - count) as u8,
+        _ => palette1[count % 6][chan]
+    }
+
 }
 
 /// Render a rectangle of the Mandelbrot set into a buffer of pixels.
@@ -94,22 +129,27 @@ fn escapes(c: Complex<f64>, limit: u32) -> Option<u32> {
 /// which holds one grayscale pixel per byte. The `upper_left` and `lower_right`
 /// arguments specify points on the complex plane corresponding to the upper
 /// left and lower right corners of the pixel buffer.
-fn render(pixels: &mut [u8], bounds: (usize, usize),
-          upper_left: (f64, f64), lower_right: (f64, f64))
-{
-    assert!(pixels.len() == bounds.0 * bounds.1);
 
-    for r in 0 .. bounds.1 {
+fn render(pixels: &mut [u8], bounds: (usize, usize),
+          upper_left: (f64, f64), lower_right: (f64, f64),
+          palette: u8)
+{
+    // assert!(pixels.len() == bounds.0 * bounds.1);
+
         for c in 0 .. bounds.0 {
-            let point = pixel_to_point(bounds, (c, r),
+            let point = pixel_to_point(bounds, (c, 0),
                                        upper_left, lower_right);
-            pixels[r * bounds.0 + c] =
-                match escapes(Complex { re: point.0, im: point.1 }, 255) {
-                    None => 0,
-                    Some(count) => 255 - count as u8
+            let cou: usize =
+                match escapes(Complex { re: point.0, im: point.1 }, 256) {
+                    None => 255 as usize,
+                    Some(count) => {
+                        count as usize
+                    }
                 };
+            for chan in 0..3 {
+                pixels[c*3 + chan] = get_color(cou, chan, palette)
+            }
         }
-    }
 }
 
 extern crate image;
@@ -129,7 +169,7 @@ fn write_bitmap(filename: &str, pixels: &[u8], bounds: (usize, usize))
     let encoder = PNGEncoder::new(output);
     try!(encoder.encode(&pixels[..],
                         bounds.0 as u32, bounds.1 as u32,
-                        ColorType::Gray(8)));
+                        ColorType::RGB(8)));
 
     Ok(())
 }
@@ -144,17 +184,17 @@ fn measure_elapsed_time<F: FnOnce()>(f: F) -> Duration {
 }
 
 
-extern crate crossbeam;
+extern crate rayon;
 
-use std::sync::Mutex;
 use std::io::Write;
+use rayon::prelude::*;
 
 fn main() {
     let args : Vec<String> = std::env::args().collect();
 
-    if args.len() != 5 {
+    if args.len() < 5 {
         writeln!(std::io::stderr(),
-                 "Usage: mandelbrot FILE PIXELS UPPERLEFT LOWERRIGHT")
+                 "Usage: mandelbrot FILE PIXELS CENTER CANVAS_DIMENSIONS PALETTE")
             .unwrap();
         writeln!(std::io::stderr(),
                  "Example: {} mandel.png 1000x750 -1.20,0.35 -1,0.20",
@@ -165,54 +205,37 @@ fn main() {
 
     let bounds = parse_pair(&args[2], 'x')
         .expect("error parsing image dimensions");
-    let upper_left = parse_pair(&args[3], ',')
-        .expect("error parsing upper left corner point");
-    let lower_right = parse_pair(&args[4], ',')
-        .expect("error parsing lower right corner point");
-
-    let mut pixels = vec![0; bounds.0 * bounds.1];
-
-    for threads in [1,  2,  3,  4,  5,  6,  7,  8,
-                    9, 10, 11, 12, 13, 14, 15, 16,
-                    20, 30, 40, 50, 60, 70, 80, 90,
-                    //100, 200, 300, 400, 500, 600, 700, 800, 900, 1000
-                    ].iter() {
-        let band_rows = bounds.1 / 400;
-
-        let dt = measure_elapsed_time(|| {
-            let bands = Mutex::new(pixels.chunks_mut(band_rows * bounds.0).enumerate());
-            crossbeam::scope(|scope| {
-                for i in 0..*threads {
-                    scope.spawn(|| {
-                        let mut count = 0;
-                        loop {
-                            match {
-                                let mut guard = bands.lock().unwrap();
-                                guard.next()
-                            }
-                            {
-                                None => { return; }
-                                Some((i, band)) => {
-                                    count += 1;
-                                    let top = band_rows * i;
-                                    let height = band.len() / bounds.0;
-                                    let band_bounds = (bounds.0, height);
-                                    let band_upper_left = pixel_to_point(bounds, (0, top),
-                                                                         upper_left, lower_right);
-                                    let band_lower_right = pixel_to_point(bounds, (bounds.0, top + height),
-                                                                          upper_left, lower_right);
-                                    render(band, band_bounds, band_upper_left, band_lower_right);
-                                }
-                            }
-                        }
-                    });
-                }
-            });
-        });
-        println!("{:4} {:.3}",
-                 threads,
-                 dt.as_secs() as f64 + dt.subsec_nanos() as f64 * 1e-9);
+    let center = parse_pair::<f64>(&args[3], ',')
+        .expect("error parsing center point");
+    let width = parse_pair::<f64>(&args[4], ',')
+        .expect("error parsing width and height");
+    let mut palette: u8 = 0;
+    if args.len() >= 6 {
+        palette = <u8>::from_str(&args[5])
+            .expect("error parsing palette")
     }
 
-    write_bitmap(&args[1], &pixels[..], bounds).expect("error writing PNG file");
+    let upper_left = (center.0 - width.0, center.1 + width.1);
+    let lower_right = (center.0 + width.0, center.1 - width.1);
+    let mut pixels = vec![0; bounds.0 * bounds.1 *3];
+
+    // Scope of slicing up `pixels` into horizontal bands.
+    {
+        let bands: Vec<(usize, &mut [u8])> = pixels
+            .chunks_mut(bounds.0*3)
+            .enumerate()
+            .collect();
+        bands.into_par_iter()
+            .for_each(|(i, band)| {
+                let top = i;
+                let band_bounds = (bounds.0, 1);
+                let band_upper_left = pixel_to_point(bounds, (0, top),
+                                                     upper_left, lower_right);
+                let band_lower_right = pixel_to_point(bounds, (bounds.0, top + 1),
+                                                      upper_left, lower_right);
+                render(band, band_bounds, band_upper_left, band_lower_right, palette);
+            });
+    }
+
+    write_bitmap(&args[1], &pixels, bounds).expect("error writing PNG file");
 }
